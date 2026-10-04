@@ -59,4 +59,64 @@ module.exports = {
       return true;
     } catch (e) { return false; }
   },
+
+  // ===== 纯净模式「暂停」：精确定位站点的「停止」按钮 =====
+  // 关键：只认「停止/stop」文本或「stop/abort」类名，并显式排除「音乐生成/生成图片」等
+  // 易被通用启发式误点的按钮（群友反馈：点暂停会点开音乐生成）。
+  // 取面积最小的匹配元素（叶子才是按钮本体）。
+  getStopFn: function () {
+    return function doubaoStopLocator(doc, win) {
+      var out = { found: false, cands: [], api: 'none' };
+      try {
+        var STOP = /(停止生成|停止回答|停止输出|停止|stop|abort|中断生成|结束生成)/i;
+        var EXCLUDE = /(音乐|生成图片|图片生成|生成视频|视频生成|上传|附件|语音|朗读|复制|分享|重试|重新生成|点赞|点踩|反馈|深度思考|联网搜索)/i;
+        var best = null;
+        var all = doc.querySelectorAll('button,[role="button"],div[role="button"],span[role="button"],a');
+        for (var i = 0; i < all.length; i++) {
+          var el = all[i];
+          try { if (el.closest && (el.closest('#cuckoo-overlay') || el.closest('.cuckoo-overlay') || el.closest('[class*="cuckoo-"]'))) continue; } catch (e) {}
+          var cls = (typeof el.className === 'string') ? el.className : '';
+          if (/cuckoo/i.test(cls)) continue;
+          var txt = (el.textContent || '').trim();
+          var aria = (el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title'))) || '';
+          var sig = (txt + ' ' + aria + ' ' + cls).trim();
+          if (EXCLUDE.test(sig)) continue;
+          var hitText = STOP.test(txt + ' ' + aria);
+          var hitClass = /(^|[\s_-])(stop|abort)([\s_-]|$)/i.test(cls);
+          if (!hitText && !hitClass) continue;
+          var r = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+          if (!r || r.width === 0 || r.height === 0) continue;
+          var area = r.width * r.height;
+          var score = area - (hitText ? 100000 : 0); // 文本命中优先，其次面积最小
+          if (!best || score < best.score) best = { el: el, score: score, r: r, sig: (txt || aria || cls).slice(0, 40) };
+        }
+        if (best) {
+          var cx = Math.round(best.r.left + best.r.width / 2);
+          var cy = Math.round(best.r.top + best.r.height / 2);
+          try { best.el.click(); out.api = 'clicked'; } catch (e) { out.api = 'click-error'; }
+          out.found = true; out.x = cx; out.y = cy; out.tag = best.sig;
+          out.cands.push('stop:' + best.sig + '@' + cx + ',' + cy);
+        }
+        try {
+          var diag = [];
+          var btns = doc.querySelectorAll('button,[role="button"]');
+          var vh = win.innerHeight || 800;
+          for (var j = 0; j < btns.length && diag.length < 8; j++) {
+            var b = btns[j];
+            try { if (b.closest && b.closest('[class*="cuckoo-"]')) continue; } catch (e) {}
+            var br = b.getBoundingClientRect ? b.getBoundingClientRect() : null;
+            if (!br || br.width === 0 || br.top < vh * 0.5) continue;
+            var t = (b.textContent || '').trim().slice(0, 10);
+            var a = (b.getAttribute && (b.getAttribute('aria-label') || b.getAttribute('title'))) || '';
+            diag.push((t || a || '?') + '@' + Math.round(br.left) + ',' + Math.round(br.top));
+          }
+          out.cands = out.cands.concat(diag);
+        } catch (e) {}
+        console.log('[doubao-stop] found=' + out.found + ' api=' + out.api + ' ' + JSON.stringify(out.cands));
+        return out;
+      } catch (e) {
+        return { found: false, error: String(e && e.message) };
+      }
+    };
+  },
 };
