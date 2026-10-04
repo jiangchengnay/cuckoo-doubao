@@ -119,4 +119,62 @@ module.exports = {
       }
     };
   },
+
+  // ===== harness 附件上传：上传入口探测（保守，避免通用启发式乱点）=====
+  // 优先隐藏 input[type=file]；其次文本/aria 明确含"上传/附件/文件/图片"的可见按钮；
+  // 找不到返回 found:false（不瞎点，避免误触"音乐生成"等）。
+  getAttachProbeSource: function () {
+    return '(' + function doubaoAttachProbe(doc, win, fileInfo) {
+      try {
+        var vh = win.innerHeight || 800;
+        var vw = win.innerWidth || 1200;
+        function visible(el) {
+          var r = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+          if (!r || r.width === 0 || r.height === 0) return null;
+          if (r.left < 0 || r.top < 0 || r.left > vw || r.top > vh) return null;
+          return r;
+        }
+        function own(el) { try { return !!(el.closest && el.closest('[class*="cuckoo-"]')); } catch (e) { return false; } }
+        function pick(el, tag) {
+          var r = el.getBoundingClientRect();
+          return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), tag: tag };
+        }
+        // ① 隐藏 file input（豆包上传可能用它）
+        try {
+          var fi = doc.querySelector('input[type=file]');
+          if (fi) {
+            var rf = fi.getBoundingClientRect ? fi.getBoundingClientRect() : null;
+            if (rf && rf.width > 0 && rf.height > 0) return pick(fi, 'file-input');
+            // 隐藏的：返回其附近"上传/附件"按钮，否则直接返回 input 自身坐标(0,0)不可点 → 交给调用方
+            return { found: false, reason: 'file-input-hidden', hasFileInput: true };
+          }
+        } catch (e) {}
+        // ② 明确的上传/附件按钮（文本/aria/title）
+        var KEY = /^(上传|上传文件|上传附件|附件|添加附件|选择文件|本地文件|图片|相册)$/;
+        var EXCL = /(音乐|生成|视频|语音|朗读|发送|停止|搜索|联网)/i;
+        var best = null;
+        var all = doc.querySelectorAll('button,[role="button"],[class*="upload"],[class*="attach"],[class*="file"]');
+        for (var i = 0; i < all.length; i++) {
+          var el = all[i];
+          if (own(el)) continue;
+          var cls = (typeof el.className === 'string') ? el.className : '';
+          if (/cuckoo/i.test(cls)) continue;
+          var txt = (el.textContent || '').trim();
+          var aria = (el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title'))) || '';
+          var sig = (txt + ' ' + aria).trim();
+          if (EXCL.test(sig)) continue;
+          var hit = KEY.test(txt) || KEY.test(aria) || /upload|attach|paperclip/i.test(cls);
+          if (!hit) continue;
+          var r = visible(el);
+          if (!r) continue;
+          var area = r.width * r.height;
+          if (!best || area < best.area) best = { el: el, area: area, r: r, sig: (txt || aria || cls).slice(0, 30) };
+        }
+        if (best) return pick(best.el, 'attach-btn:' + best.sig);
+        return { found: false, reason: 'no-attach-candidate' };
+      } catch (e) {
+        return { found: false, reason: 'error:' + (e && e.message) };
+      }
+    }.toString() + ')';
+  },
 };
